@@ -13,7 +13,7 @@ from capt.misc_functions.mapping_matrix import get_mappingMatrix, covMap_superFa
 from joblib import Parallel, delayed
 
 
-def inner_loop(j, i, roi_ones_arange, mm_subapPos,sa_mm,sb_mm, mm, subap1_comb_shift, subap2_comb_shift, roi_axis, mapping_type, shwfs_centroids, wfs1_n_subap, wfs2_n_subap, roi_cov_xx, roi_cov_yy):
+def inner_loop(j,roi_ones_arange, mm_subapPos,sa_mm,sb_mm, mm, subap1_comb_shift, subap2_comb_shift, roi_axis, mapping_type, shwfs_centroids ):
         roi_loc = numpy.where(roi_ones_arange==j)
         roi_baseline = mm_subapPos[i, roi_loc[0], roi_loc[1]]
         
@@ -38,7 +38,7 @@ def inner_loop(j, i, roi_ones_arange, mm_subapPos,sa_mm,sb_mm, mm, subap1_comb_s
                         
                 roi_cov_yy[roi_loc[0], roi_loc[1]] = cova
 
-        #return (roi_loc[0], roi_loc[1], covax, covay)
+        return roi_cov_xx, roi_cov_yy
 
 
 def calculate_roi_covariance(shwfs_centroids, gs_pos, pupil_mask, tel_diam, roi_belowGround, roi_envelope, roi_axis, mapping_type):
@@ -100,8 +100,7 @@ def calculate_roi_covariance(shwfs_centroids, gs_pos, pupil_mask, tel_diam, roi_
 
 		#integer shift for each GS combination 
 		subap1_comb_shift = selector[i][0]*2*wfs1_n_subap
-         
-       #tim9= time.time()
+                #tim9= time.time()
 		subap2_comb_shift = selector[i][1]*2*wfs1_n_subap
                 #tim10=time.time()
 
@@ -116,10 +115,7 @@ def calculate_roi_covariance(shwfs_centroids, gs_pos, pupil_mask, tel_diam, roi_
                 #covtimes=numpy.zeros((num_roi_baselines,2))
                 
                 #parallel_loop
-                print('starting parallel inner loop')
-		roi_cov_nores = Parallel(n_jobs=-1, backend="threading")(delayed(inner_loop)(j, i, roi_ones_arange, mm_subapPos,sa_mm,sb_mm, mm, subap1_comb_shift, subap2_comb_shift, roi_axis, mapping_type, shwfs_centroids, wfs1_n_subap, wfs2_n_subap, roi_cov_xx, roi_cov_yy) for j in range(1, num_roi_baselines+1))
-                print('parallel inner loop finished')
-
+		roi_cov_xx, roi_cov_yy = Parallel(n_jobs=-1, backend="threading")(delayed(inner_loop)(j, roi_ones_arange, mm_subapPos,sa_mm,sb_mm, mm, subap1_comb_shift, subap2_comb_shift, roi_axis, mapping_type, shwfs_centroids) for j in range(1, num_roi_baselines+1))
 		if roi_axis=='x':
 			roi_covariance[i*allMapPos.shape[1]:(i+1)*allMapPos.shape[1]] = roi_cov_xx
 		if roi_axis=='y':

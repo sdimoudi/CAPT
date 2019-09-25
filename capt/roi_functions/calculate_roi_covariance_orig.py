@@ -10,35 +10,6 @@ from capt.roi_functions.gamma_vector import gamma_vector
 from capt.misc_functions.make_pupil_mask import make_pupil_mask
 from capt.roi_functions.roi_referenceArrays import roi_referenceArrays
 from capt.misc_functions.mapping_matrix import get_mappingMatrix, covMap_superFast, arrayRef
-from joblib import Parallel, delayed
-
-
-def inner_loop(j, i, roi_ones_arange, mm_subapPos,sa_mm,sb_mm, mm, subap1_comb_shift, subap2_comb_shift, roi_axis, mapping_type, shwfs_centroids, wfs1_n_subap, wfs2_n_subap, roi_cov_xx, roi_cov_yy):
-        roi_loc = numpy.where(roi_ones_arange==j)
-        roi_baseline = mm_subapPos[i, roi_loc[0], roi_loc[1]]
-        
-        subaps1 = sa_mm[:, roi_baseline][numpy.where(mm[:, roi_baseline]==1)] + subap1_comb_shift
-        subaps2 = sb_mm[:, roi_baseline][numpy.where(mm[:, roi_baseline]==1)] + subap2_comb_shift
-        num_subaps = subaps1.shape[0]
-        
-        # stop
-        if roi_axis!='y':
-                if mapping_type=='mean':
-                        cova = numpy.mean((shwfs_centroids[subaps1] * (shwfs_centroids[subaps2])).sum(1)/(shwfs_centroids.shape[1]-1))
-                if mapping_type=='median':
-                        cova = numpy.median((shwfs_centroids[subaps1] * (shwfs_centroids[subaps2])).sum(1)/(shwfs_centroids.shape[1]-1))
-                roi_cov_xx[roi_loc[0], roi_loc[1]] = cova
-
-                
-        if roi_axis!='x':
-                if mapping_type=='mean':
-                        cova = numpy.mean((shwfs_centroids[subaps1+wfs1_n_subap] * (shwfs_centroids[subaps2+wfs2_n_subap])).sum(1)/(shwfs_centroids.shape[1]-1))
-                if mapping_type=='median':
-                        cova = numpy.median((shwfs_centroids[subaps1+wfs1_n_subap] * (shwfs_centroids[subaps2+wfs2_n_subap])).sum(1)/(shwfs_centroids.shape[1]-1))
-                        
-                roi_cov_yy[roi_loc[0], roi_loc[1]] = cova
-
-        #return (roi_loc[0], roi_loc[1], covax, covay)
 
 
 def calculate_roi_covariance(shwfs_centroids, gs_pos, pupil_mask, tel_diam, roi_belowGround, roi_envelope, roi_axis, mapping_type):
@@ -100,8 +71,7 @@ def calculate_roi_covariance(shwfs_centroids, gs_pos, pupil_mask, tel_diam, roi_
 
 		#integer shift for each GS combination 
 		subap1_comb_shift = selector[i][0]*2*wfs1_n_subap
-         
-       #tim9= time.time()
+                #tim9= time.time()
 		subap2_comb_shift = selector[i][1]*2*wfs1_n_subap
                 #tim10=time.time()
 
@@ -112,14 +82,56 @@ def calculate_roi_covariance(shwfs_centroids, gs_pos, pupil_mask, tel_diam, roi_
 			roi_cov_yy = numpy.zeros(roi_ones.shape)
                 #debug
                 print('num_roi_baselines for map column {} is {}'.format(i, num_roi_baselines))
-                #subapshapes=numpy.zeros((num_roi_baselines,2))
-                #covtimes=numpy.zeros((num_roi_baselines,2))
-                
-                #parallel_loop
-                print('starting parallel inner loop')
-		roi_cov_nores = Parallel(n_jobs=-1, backend="threading")(delayed(inner_loop)(j, i, roi_ones_arange, mm_subapPos,sa_mm,sb_mm, mm, subap1_comb_shift, subap2_comb_shift, roi_axis, mapping_type, shwfs_centroids, wfs1_n_subap, wfs2_n_subap, roi_cov_xx, roi_cov_yy) for j in range(1, num_roi_baselines+1))
-                print('parallel inner loop finished')
+                subapshapes=numpy.zeros((num_roi_baselines,2))
+                covtimes=numpy.zeros((num_roi_baselines,2))
+		for j in range(1, num_roi_baselines+1):
+			# print(j)
+                        tim2 = time.time()
+			roi_loc = numpy.where(roi_ones_arange==j)
+                        #tim11= time.time()
+			roi_baseline = mm_subapPos[i, roi_loc[0], roi_loc[1]]
+                        #tim12= time.time()
+			
+			subaps1 = sa_mm[:, roi_baseline][numpy.where(mm[:, roi_baseline]==1)] + subap1_comb_shift
+                        print('subaps1 shape', subaps1.shape)
+                        subapshapes[j-1,0]=subaps1.shape[0]
+                        #tim13= time.time()
+			subaps2 = sb_mm[:, roi_baseline][numpy.where(mm[:, roi_baseline]==1)] + subap2_comb_shift
+                        print('subaps2 shape', subaps2.shape)
+                        subapshapes[j-1,1]=subaps2.shape[0]
+                        #tim14= time.time()
+			num_subaps = subaps1.shape[0]
+                        #print('tim11, tim12, tim13,tim14:',tim11-tim2, tim12-tim11, tim13-tim12,tim14-tim13)
 
+			# stop
+			if roi_axis!='y':
+				if mapping_type=='mean':
+                                        tim5=time.time()
+					cova = numpy.mean((shwfs_centroids[subaps1] * (shwfs_centroids[subaps2])).sum(1)/(shwfs_centroids.shape[1]-1))
+                                        tim6=time.time()
+                                        print('cova x time:', tim6-tim5)
+                                        covtimes[j-1,0]=tim6-tim5
+				if mapping_type=='median':
+                                        #print('median')
+					cova = numpy.median((shwfs_centroids[subaps1] * (shwfs_centroids[subaps2])).sum(1)/(shwfs_centroids.shape[1]-1))
+				roi_cov_xx[roi_loc[0], roi_loc[1]] = cova
+                                #print('roi_cov_xx time:', time.time()-tim6)
+
+			if roi_axis!='x':
+                                #print('yes')
+				if mapping_type=='mean':
+                                        tim5=time.time()
+					cova = numpy.mean((shwfs_centroids[subaps1+wfs1_n_subap] * (shwfs_centroids[subaps2+wfs2_n_subap])).sum(1)/(shwfs_centroids.shape[1]-1))
+                                        tim6=time.time()
+                                        print('cova y time:', tim6-tim5)
+                                        covtimes[j-1,1]=tim6-tim5
+				if mapping_type=='median':
+					cova = numpy.median((shwfs_centroids[subaps1+wfs1_n_subap] * (shwfs_centroids[subaps2+wfs2_n_subap])).sum(1)/(shwfs_centroids.shape[1]-1))
+
+				roi_cov_yy[roi_loc[0], roi_loc[1]] = cova
+                        
+                        tim3 = time.time()
+                        print('inner loop iteration took', tim3-tim2, 's')
 		if roi_axis=='x':
 			roi_covariance[i*allMapPos.shape[1]:(i+1)*allMapPos.shape[1]] = roi_cov_xx
 		if roi_axis=='y':
@@ -130,8 +142,8 @@ def calculate_roi_covariance(shwfs_centroids, gs_pos, pupil_mask, tel_diam, roi_
 			roi_covariance[i*allMapPos.shape[1]:(i+1)*allMapPos.shape[1]] = numpy.hstack((roi_cov_xx, roi_cov_yy))
                 tim4 = time.time()
                 print('outer loop iteration took:', tim4-tim1, 's')
-                #numpy.savetxt('covtimes_{}.txt'.format(i),covtimes,fmt=['%f','%f'] )
-                #numpy.savetxt('subapshapes_{}.txt'.format(i),subapshapes, fmt=['%d','%d'])
+                numpy.savetxt('covtimes_{}.txt'.format(i),covtimes,fmt=['%f','%f'] )
+                numpy.savetxt('subapshapes_{}.txt'.format(i),subapshapes, fmt=['%d','%d'])
 
 	timeStop = time.time()
 	time_taken = timeStop - timeStart
