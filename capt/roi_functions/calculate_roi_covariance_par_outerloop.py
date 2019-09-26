@@ -10,8 +10,9 @@ from capt.roi_functions.gamma_vector import gamma_vector
 from capt.misc_functions.make_pupil_mask import make_pupil_mask
 from capt.roi_functions.roi_referenceArrays import roi_referenceArrays
 from capt.misc_functions.mapping_matrix import get_mappingMatrix, covMap_superFast, arrayRef
-from joblib import Parallel, delayed
 
+from joblib import Parallel, delayed, parallel_backend
+from dask.distributed import Client
 
 def inner_loop(j, i, roi_ones_arange, mm_subapPos,sa_mm,sb_mm, mm, subap1_comb_shift, subap2_comb_shift, roi_axis, mapping_type, shwfs_centroids, wfs1_n_subap, wfs2_n_subap, roi_cov_xx, roi_cov_yy):
         roi_loc = numpy.where(roi_ones_arange==j)
@@ -40,6 +41,66 @@ def inner_loop(j, i, roi_ones_arange, mm_subapPos,sa_mm,sb_mm, mm, subap1_comb_s
 
         #return (roi_loc[0], roi_loc[1], covax, covay)
 
+def outer_loop(i, allMapPos, covMapDim, selector, wfs1_n_subap, wfs2_n_subap,mm_subapPos,sa_mm,sb_mm, mm, roi_axis, mapping_type, shwfs_centroids, roi_covariance):
+        roi_ones = numpy.ones(allMapPos[i,:,:,0].shape)
+        roi_ones[numpy.where(allMapPos[i,:,:,0]==2*covMapDim)] = 0
+        num_roi_baselines = int(roi_ones.sum())
+        arange_baselines = numpy.arange(num_roi_baselines) + 1
+        roi_ones_arange = roi_ones.copy()
+        roi_ones_arange[roi_ones==1] = arange_baselines
+        av = numpy.ones(roi_ones.shape)
+        #integer shift for each GS combination 
+        subap1_comb_shift = selector[i][0]*2*wfs1_n_subap
+       	subap2_comb_shift = selector[i][1]*2*wfs1_n_subap
+        
+        if roi_axis!='y':
+                roi_cov_xx = numpy.zeros(roi_ones.shape)
+
+        if roi_axis!='x':
+		roi_cov_yy = numpy.zeros(roi_ones.shape)
+        #debug
+        print('num_roi_baselines for map column {} is {}'.format(i, num_roi_baselines))
+                
+        #parallel_loop
+ #       print('starting parallel inner loop')
+
+ #       with parallel_backend('dask', n_jobs=8):
+ #               roi_cov_nores = Parallel()(delayed(inner_loop)(j, i, roi_ones_arange, mm_subapPos,sa_mm,sb_mm, mm, subap1_comb_shift, subap2_comb_shift, roi_axis, mapping_type, shwfs_centroids, wfs1_n_subap, wfs2_n_subap, roi_cov_xx, roi_cov_yy) for j in range(1, num_roi_baselines+1))
+        #print('parallel inner loop finished')
+        for j in range(1, num_roi_baselines+1):
+                roi_loc = numpy.where(roi_ones_arange==j)
+                roi_baseline = mm_subapPos[i, roi_loc[0], roi_loc[1]]
+                
+                subaps1 = sa_mm[:, roi_baseline][numpy.where(mm[:, roi_baseline]==1)] + subap1_comb_shift
+                subaps2 = sb_mm[:, roi_baseline][numpy.where(mm[:, roi_baseline]==1)] + subap2_comb_shift
+                num_subaps = subaps1.shape[0]
+                
+                # stop
+                if roi_axis!='y':
+                        if mapping_type=='mean':
+                                cova = numpy.mean((shwfs_centroids[subaps1] * (shwfs_centroids[subaps2])).sum(1)/(shwfs_centroids.shape[1]-1))
+                        if mapping_type=='median':
+                                cova = numpy.median((shwfs_centroids[subaps1] * (shwfs_centroids[subaps2])).sum(1)/(shwfs_centroids.shape[1]-1))
+                        roi_cov_xx[roi_loc[0], roi_loc[1]] = cova
+
+                
+                if roi_axis!='x':
+                        if mapping_type=='mean':
+                                cova = numpy.mean((shwfs_centroids[subaps1+wfs1_n_subap] * (shwfs_centroids[subaps2+wfs2_n_subap])).sum(1)/(shwfs_centroids.shape[1]-1))
+                        if mapping_type=='median':
+                                cova = numpy.median((shwfs_centroids[subaps1+wfs1_n_subap] * (shwfs_centroids[subaps2+wfs2_n_subap])).sum(1)/(shwfs_centroids.shape[1]-1))
+                        
+                        roi_cov_yy[roi_loc[0], roi_loc[1]] = cova
+               
+        if roi_axis=='x':
+                roi_covariance[i*allMapPos.shape[1]:(i+1)*allMapPos.shape[1]] = roi_cov_xx
+        if roi_axis=='y':
+                roi_covariance[i*allMapPos.shape[1]:(i+1)*allMapPos.shape[1]] = roi_cov_yy
+        if roi_axis=='x+y':
+                roi_covariance[i*allMapPos.shape[1]:(i+1)*allMapPos.shape[1]] = (roi_cov_xx+roi_cov_yy)/2.
+        if roi_axis=='x and y':
+                roi_covariance[i*allMapPos.shape[1]:(i+1)*allMapPos.shape[1]] = numpy.hstack((roi_cov_xx, roi_cov_yy))
+                
 
 def calculate_roi_covariance(shwfs_centroids, gs_pos, pupil_mask, tel_diam, roi_belowGround, roi_envelope, roi_axis, mapping_type):
 	"""Takes SHWFS centroids and directly calculates the covariance map ROI (does not require going via covariance matrix).
@@ -80,58 +141,10 @@ def calculate_roi_covariance(shwfs_centroids, gs_pos, pupil_mask, tel_diam, roi_
 	mm_subapPos = allMapPos[:, :, :, 1] + allMapPos[:, :, :, 0] * covMapDim
         #debug
         print('allMapPos.shape', allMapPos.shape)
-	for i in range(allMapPos.shape[0]):
-                tim1 = time.time()
-		roi_ones = numpy.ones(allMapPos[i,:,:,0].shape)
-                #tim2= time.time()
-		roi_ones[numpy.where(allMapPos[i,:,:,0]==2*covMapDim)] = 0
-                #tim3= time.time()
 
-		num_roi_baselines = int(roi_ones.sum())
-                #tim4= time.time()
-		arange_baselines = numpy.arange(num_roi_baselines) + 1
-                #tim5= time.time()
-		roi_ones_arange = roi_ones.copy()
-                #tim6= time.time()
-		roi_ones_arange[roi_ones==1] = arange_baselines
-                #tim7=time.time()
-		av = numpy.ones(roi_ones.shape)
-                #tim8= time.time()
-
-		#integer shift for each GS combination 
-		subap1_comb_shift = selector[i][0]*2*wfs1_n_subap
-         
-       #tim9= time.time()
-		subap2_comb_shift = selector[i][1]*2*wfs1_n_subap
-                #tim10=time.time()
-
-		if roi_axis!='y':
-			roi_cov_xx = numpy.zeros(roi_ones.shape)
-
-		if roi_axis!='x':
-			roi_cov_yy = numpy.zeros(roi_ones.shape)
-                #debug
-                print('num_roi_baselines for map column {} is {}'.format(i, num_roi_baselines))
-                #subapshapes=numpy.zeros((num_roi_baselines,2))
-                #covtimes=numpy.zeros((num_roi_baselines,2))
-                
-                #parallel_loop
-                print('starting parallel inner loop')
-		roi_cov_nores = Parallel(n_jobs=-1, backend="threading")(delayed(inner_loop)(j, i, roi_ones_arange, mm_subapPos,sa_mm,sb_mm, mm, subap1_comb_shift, subap2_comb_shift, roi_axis, mapping_type, shwfs_centroids, wfs1_n_subap, wfs2_n_subap, roi_cov_xx, roi_cov_yy) for j in range(1, num_roi_baselines+1))
-                print('parallel inner loop finished')
-
-		if roi_axis=='x':
-			roi_covariance[i*allMapPos.shape[1]:(i+1)*allMapPos.shape[1]] = roi_cov_xx
-		if roi_axis=='y':
-			roi_covariance[i*allMapPos.shape[1]:(i+1)*allMapPos.shape[1]] = roi_cov_yy
-		if roi_axis=='x+y':
-			roi_covariance[i*allMapPos.shape[1]:(i+1)*allMapPos.shape[1]] = (roi_cov_xx+roi_cov_yy)/2.
-		if roi_axis=='x and y':
-			roi_covariance[i*allMapPos.shape[1]:(i+1)*allMapPos.shape[1]] = numpy.hstack((roi_cov_xx, roi_cov_yy))
-                tim4 = time.time()
-                print('outer loop iteration took:', tim4-tim1, 's')
-                #numpy.savetxt('covtimes_{}.txt'.format(i),covtimes,fmt=['%f','%f'] )
-                #numpy.savetxt('subapshapes_{}.txt'.format(i),subapshapes, fmt=['%d','%d'])
+ #       client = Client(processes=False) # create dask distributed cluster (local)
+  #      with parallel_backend('dask', n_jobs=allMapPos.shape[0]):
+        roi_cov_nores = Parallel( prefer='threads', n_jobs=allMapPos.shape[0] )(delayed(outer_loop)(i, allMapPos, covMapDim, selector, wfs1_n_subap, wfs2_n_subap,mm_subapPos,sa_mm,sb_mm, mm, roi_axis, mapping_type, shwfs_centroids,roi_covariance ) for i in range(allMapPos.shape[0]))
 
 	timeStop = time.time()
 	time_taken = timeStop - timeStart

@@ -10,10 +10,12 @@ from capt.roi_functions.gamma_vector import gamma_vector
 from capt.misc_functions.make_pupil_mask import make_pupil_mask
 from capt.roi_functions.roi_referenceArrays import roi_referenceArrays
 from capt.misc_functions.mapping_matrix import get_mappingMatrix, covMap_superFast, arrayRef
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed, parallel_backend
+#from dask.distributed import Client
 
 
 def inner_loop(j, i, roi_ones_arange, mm_subapPos,sa_mm,sb_mm, mm, subap1_comb_shift, subap2_comb_shift, roi_axis, mapping_type, shwfs_centroids, wfs1_n_subap, wfs2_n_subap, roi_cov_xx, roi_cov_yy):
+        #print('j={}'.format(j))
         roi_loc = numpy.where(roi_ones_arange==j)
         roi_baseline = mm_subapPos[i, roi_loc[0], roi_loc[1]]
         
@@ -80,30 +82,23 @@ def calculate_roi_covariance(shwfs_centroids, gs_pos, pupil_mask, tel_diam, roi_
 	mm_subapPos = allMapPos[:, :, :, 1] + allMapPos[:, :, :, 0] * covMapDim
         #debug
         print('allMapPos.shape', allMapPos.shape)
-	for i in range(allMapPos.shape[0]):
+        mapPos0 = allMapPos.shape[0]
+        mapPos1 = allMapPos.shape[1]
+        mapPos2 = allMapPos.shape[2]
+        mapPos3 = allMapPos.shape[3]
+	for i in range(mapPos0):
                 tim1 = time.time()
 		roi_ones = numpy.ones(allMapPos[i,:,:,0].shape)
-                #tim2= time.time()
-		roi_ones[numpy.where(allMapPos[i,:,:,0]==2*covMapDim)] = 0
-                #tim3= time.time()
-
-		num_roi_baselines = int(roi_ones.sum())
-                #tim4= time.time()
-		arange_baselines = numpy.arange(num_roi_baselines) + 1
-                #tim5= time.time()
-		roi_ones_arange = roi_ones.copy()
-                #tim6= time.time()
-		roi_ones_arange[roi_ones==1] = arange_baselines
-                #tim7=time.time()
-		av = numpy.ones(roi_ones.shape)
-                #tim8= time.time()
-
+  		roi_ones[numpy.where(allMapPos[i,:,:,0]==2*covMapDim)] = 0
+  		num_roi_baselines = int(roi_ones.sum())
+  		arange_baselines = numpy.arange(num_roi_baselines) + 1
+  		roi_ones_arange = roi_ones.copy()
+  		roi_ones_arange[roi_ones==1] = arange_baselines
+  		av = numpy.ones(roi_ones.shape)
+  
 		#integer shift for each GS combination 
 		subap1_comb_shift = selector[i][0]*2*wfs1_n_subap
-         
-       #tim9= time.time()
-		subap2_comb_shift = selector[i][1]*2*wfs1_n_subap
-                #tim10=time.time()
+                subap2_comb_shift = selector[i][1]*2*wfs1_n_subap
 
 		if roi_axis!='y':
 			roi_cov_xx = numpy.zeros(roi_ones.shape)
@@ -112,22 +107,28 @@ def calculate_roi_covariance(shwfs_centroids, gs_pos, pupil_mask, tel_diam, roi_
 			roi_cov_yy = numpy.zeros(roi_ones.shape)
                 #debug
                 print('num_roi_baselines for map column {} is {}'.format(i, num_roi_baselines))
-                #subapshapes=numpy.zeros((num_roi_baselines,2))
-                #covtimes=numpy.zeros((num_roi_baselines,2))
                 
-                #parallel_loop
-                print('starting parallel inner loop')
-		roi_cov_nores = Parallel(n_jobs=-1, backend="threading")(delayed(inner_loop)(j, i, roi_ones_arange, mm_subapPos,sa_mm,sb_mm, mm, subap1_comb_shift, subap2_comb_shift, roi_axis, mapping_type, shwfs_centroids, wfs1_n_subap, wfs2_n_subap, roi_cov_xx, roi_cov_yy) for j in range(1, num_roi_baselines+1))
-                print('parallel inner loop finished')
+                #parallel_loop for j in range(1, num_roi_baselines+1)
+                print('starting 1st parallel inner loop')
+                t1 = time.time()
+                roi_cov_nores = Parallel(prefer='threads', n_jobs=32)(delayed(inner_loop)(j, i, roi_ones_arange, mm_subapPos,sa_mm,sb_mm, mm, subap1_comb_shift, subap2_comb_shift, roi_axis, mapping_type, shwfs_centroids, wfs1_n_subap, wfs2_n_subap, roi_cov_xx, roi_cov_yy) for j in range(1, 33))
+                t2 = time.time()
+                print('parallel inner loop finished in {} seconds'.format(t2-t1))
+                #print('doing remaining loop in serial')
+                #roi_cov_nores = Parallel(prefer='threads', n_jobs=16)(delayed(inner_loop)(j, i, roi_ones_arange, mm_subapPos,sa_mm,sb_mm, mm, subap1_comb_shift, subap2_comb_shift, roi_axis, mapping_type, shwfs_centroids, wfs1_n_subap, wfs2_n_subap, roi_cov_xx, roi_cov_yy) for j in range(17, 33))
+                t1 = time.time()
+                roi_cov_nores = Parallel(prefer='threads', n_jobs=16)(delayed(inner_loop)(j, i, roi_ones_arange, mm_subapPos,sa_mm,sb_mm, mm, subap1_comb_shift, subap2_comb_shift, roi_axis, mapping_type, shwfs_centroids, wfs1_n_subap, wfs2_n_subap, roi_cov_xx, roi_cov_yy) for j in range(33,49))
+                t2 = time.time()
+                print('2nd parallel inner loop finished in {} seconds'.format(t2-t1))
 
 		if roi_axis=='x':
-			roi_covariance[i*allMapPos.shape[1]:(i+1)*allMapPos.shape[1]] = roi_cov_xx
+			roi_covariance[i*mapPos1:(i+1)*mapPos1] = roi_cov_xx
 		if roi_axis=='y':
-			roi_covariance[i*allMapPos.shape[1]:(i+1)*allMapPos.shape[1]] = roi_cov_yy
+			roi_covariance[i*mapPos1:(i+1)*mapPos1] = roi_cov_yy
 		if roi_axis=='x+y':
-			roi_covariance[i*allMapPos.shape[1]:(i+1)*allMapPos.shape[1]] = (roi_cov_xx+roi_cov_yy)/2.
+			roi_covariance[i*mapPos1:(i+1)*mapPos1] = (roi_cov_xx+roi_cov_yy)/2.
 		if roi_axis=='x and y':
-			roi_covariance[i*allMapPos.shape[1]:(i+1)*allMapPos.shape[1]] = numpy.hstack((roi_cov_xx, roi_cov_yy))
+			roi_covariance[i*mapPos1:(i+1)*mapPos1] = numpy.hstack((roi_cov_xx, roi_cov_yy))
                 tim4 = time.time()
                 print('outer loop iteration took:', tim4-tim1, 's')
                 #numpy.savetxt('covtimes_{}.txt'.format(i),covtimes,fmt=['%f','%f'] )
@@ -144,40 +145,45 @@ def calculate_roi_covariance(shwfs_centroids, gs_pos, pupil_mask, tel_diam, roi_
 
 
 if __name__=='__main__':
-	n_wfs = 3
-	gs_pos = numpy.array(([0,-40], [0, 0], [30,0]))
+        import sys
+        from capt.misc_functions.dasp_cents_reshape import dasp_cents_reshape
+        idir = 'dasp-centroids/'
+        if len(sys.argv) > 1:
+                idir = sys.argv[1] 
+        print('using input directory for slopes: {}, to change quit and run again with {} <dir>'.format(idir,sys.argv[0] ))
+
+        print('preparing parameters')
+	n_wfs = 6
+        r = 60
+	gs_pos = numpy.array([(r, 0), (r*numpy.cos(2*numpy.pi/6),r*numpy.sin(2*numpy.pi/6) ), (r*numpy.cos(2*2*numpy.pi/6),r*numpy.sin(2*2*numpy.pi/6) ),(r*numpy.cos(3*2*numpy.pi/6),r*numpy.sin(3*2*numpy.pi/6) ), (r*numpy.cos(4*2*numpy.pi/6),r*numpy.sin(4*2*numpy.pi/6) ), (r*numpy.cos(5*2*numpy.pi/6),r*numpy.sin(5*2*numpy.pi/6) ) ])
 	# gs_pos = numpy.array(([0,-40], [0, 0]))
-	tel_diam = 4.2
-	roi_belowGround = 6
-	roi_envelope = 6
-	nx_subap = numpy.array([7]*n_wfs)
-	n_subap = numpy.array([36]*n_wfs)
+	tel_diam = 39.3
+        obs_diam = 11.1
+	roi_belowGround = 0
+	roi_envelope = 0
+	nx_subap = numpy.array([80]*n_wfs)
+	n_subap = numpy.array([4632]*n_wfs)
 
+        print('creating pupil mask')
 	pupil_mask = make_pupil_mask('circle', n_subap, nx_subap[0], 
-			1., tel_diam)
-	cus_pupilMask = pupil_mask.copy()
-	cus_pupilMask[2] = 0
-	cus_pupilMask[:,0] = 0
-	hl_duds = pupil_mask + cus_pupilMask
-	hl_duds_flat = hl_duds[pupil_mask==1].flatten()
-	reduce_cents = numpy.tile(hl_duds_flat, 2*gs_pos.shape[0])
-	n_subap = numpy.array([int(cus_pupilMask.sum())]*n_wfs)
+			obs_diam, tel_diam)
 
-	# onesMat, wfsMat_1, wfsMat_2, allMapPos, selector, xy_separations = roi_referenceArrays(
-	# 	cus_pupilMask, gs_pos, tel_diam, roi_belowGround, roi_envelope)
-
+        print('creating ROI reference arrays')
 	onesMat, wfsMat_1, wfsMat_2, allMapPos, selector, xy_separations = roi_referenceArrays(
-				cus_pupilMask, gs_pos, tel_diam, roi_belowGround, roi_envelope)
+                pupil_mask, gs_pos, tel_diam, roi_belowGround, roi_envelope)
 
-	shwfs_centroids = fits.getdata('../../../../windProfiling/wind_paper/canary/data/test_fits/canary_noNoise_it10k_nl3_h0a10a20km_r00p1_L025_ws10a15a20_wd260a80a350_infScrn_wss448_gsPos0cn40a0c0a30c0.fits')#[:, :72*2]
-	shwfs_centroids = shwfs_centroids[:, reduce_cents==2]
+        print('Reading centroids')	
+        centslist = [fits.getdata(idir+'saveOutput_{}b0.fits'.format(i+1)).byteswap() for i in range(n_wfs)]
+        shwfs_centroids = numpy.stack(centslist) 
+        shwfs_centroids = dasp_cents_reshape(shwfs_centroids, pupil_mask, n_wfs)
+#	shwfs_centroids = shwfs_centroids[:, reduce_cents==2]
 
-	covMapDim = 13
 	roi_axis = 'x and y'
 	mapping_type = 'mean'
 
-	nr, nt = calculate_roi_covariance(shwfs_centroids, gs_pos, cus_pupilMask, tel_diam, roi_belowGround, roi_envelope, roi_axis, mapping_type)
+        print('calling calculate_roi_covariance')
+	nr, nt = calculate_roi_covariance(shwfs_centroids, gs_pos, pupil_mask, tel_diam, roi_belowGround, roi_envelope, roi_axis, mapping_type)
 	print('Time taken: {}'.format(nt))
 
-	pyplot.figure()
-	pyplot.imshow(nr)
+#	pyplot.figure()
+#	pyplot.imshow(nr)
