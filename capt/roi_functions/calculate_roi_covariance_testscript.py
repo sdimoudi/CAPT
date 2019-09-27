@@ -65,6 +65,14 @@ def calculate_roi_covariance(shwfs_centroids, gs_pos, pupil_mask, tel_diam, roi_
 	n_subap = numpy.array([int(pupil_mask.sum())]*gs_pos.shape[0])
 	mm, sa_mm, sb_mm, allMapPos, selector, xy_separations = roi_referenceArrays(
 				numpy.rot90(pupil_mask,2), gs_pos, tel_diam, roi_belowGround, roi_envelope)
+        #odir = '/rds-d2/user/dc-dimo1/rds-dirac-dr006/hrm/reference_arrays/'
+        #fnames = ['mm.fits','sa_mm.fits', 'sb_mm.fits','allMapPos.fits', 'selector.fits', 'xy_separations.fits']
+        # for arr, fname in zip([mm, sa_mm, sb_mm, allMapPos, selector, xy_separations], [odir +fnames[i] for i in range(len(fnames))]):
+        #         fits.writeto(fname, arr)
+        #         print('wrote to {}'.format(fname))
+        #sys.exit()
+        #[mm, sa_mm, sb_mm, allMapPos, selector, xy_separations] = [fits.getdata(odir+fname) for fname in fnames]
+        #print('wrote to {}'.format(fname))
 
 	timeStart = time.time()
 
